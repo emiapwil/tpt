@@ -1,5 +1,7 @@
 package openflash.fimt.util
 
+import scala.collection.mutable.SortedSet
+
 trait Handle[V, T] {
 
   def isEmpty: Boolean
@@ -15,6 +17,8 @@ trait Handle[V, T] {
 }
 
 trait Handles[V, T] {
+
+  val empty: Handle[V, T]
 
   def init(elems: V*): Handle[V, T]
 
@@ -58,21 +62,76 @@ class SetHandles[V] extends Handles[V, Set[V]] {
   }
 }
 
+class SortedSetHandles[V](val minFirst: Boolean)(implicit val order: Ordering[V])
+    extends Handles[V, SortedSet[V]] {
+
+  type T = SortedSet[V]
+
+  val empty = init()
+
+  override def init(elems: V*): Handle[V, T] = new SSetHandle(elems)
+
+  override def couple(elem: V, seg: Segmentized[V]) = (elem, seg)
+
+  override def lookup(handle: Handle[V, T], elem: V): Handle[V, T] = handle match {
+    case sh: SSetHandle => {
+      val filtered = if (minFirst) sh.impl.rangeTo(elem) else sh.impl.rangeFrom(elem)
+      new SSetHandle(filtered)
+    }
+    case _ => empty
+  }
+
+  class SSetHandle(value: Iterable[V]) extends Handle[V, T] {
+    override def impl = SortedSet.from(value.toSeq)
+
+    override def isEmpty = impl.isEmpty
+
+    override def +(coupled: (V, Segmentized[V])) = {
+      impl += coupled._1
+      this
+    }
+
+    override def -(coupled: (V, Segmentized[V])) = {
+      impl -= coupled._1
+      this
+    }
+
+    override def |(rhs: Handle[V, T]) = new SSetHandle(impl | rhs.impl)
+
+    override def equals(rhs: Any): Boolean = rhs match {
+      case sh: SSetHandle => impl == sh.impl
+      case _ => false
+    }
+
+    override def toString(): String = impl.toString()
+  }
+}
+
 class TenaryPatriciaTree[V, T](val maxDepth: Int,
                                val handlers: Handles[V, T] = new SetHandles[V]) {
 
   var root: Node = null
 
-  val empty = handlers.init()
+  val empty = handlers.empty
+
+  def makeEmpty = handlers.init()
 
   class Node(var cond: Segment, var depth: Int,
-             var values: Handle[V, T] = empty,
+             var values: Handle[V, T] = makeEmpty,
              var lch: Node = null, var rch: Node = null,
              var wildcard: Node = null){
 
+    def subsetL: Handle[V, T] = if (lch == null) empty else lch.subsets
+
+    def subsetR: Handle[V, T] = if (rch == null) empty else rch.subsets
+
+    def subsetW: Handle[V, T] = if (wildcard == null) empty else wildcard.subsets
+
+    var subsets: Handle[V, T] = values | subsetL | subsetR | subsetW
+
     def isLast: Boolean = depth + cond.len >= maxDepth
 
-    def isLeaf: Boolean = (values.isEmpty)
+    def isLeaf: Boolean = ((lch == null) && (rch == null) && (wildcard == null))
   }
 
   def getLongestMatch(cond: Segment, segmentized: Segmentized[V]): Segment = {
@@ -90,21 +149,38 @@ class TenaryPatriciaTree[V, T](val maxDepth: Int,
     if (node == null) {
       return empty
     }
-    while (segmentized.current.len < node.cond.len)
-      segmentized.proceed()
-    if (node.cond > segmentized.current) {
-      if (node.isLeaf) {
-        return node.values
+    segmentized.proceed(node.cond.len)
+    if ((node.cond > segmentized.current) || (node.cond < segmentized.current)) {
+      // the segment is matched
+
+      if ((!segmentized.hasNext) || (node.isLeaf)) {
+        // the whole subtree is matched, return subsets
+        println("subset:", node.subsets, value, handlers.lookup(node.subsets, value))
+        return handlers.lookup(node.subsets, value)
       }
-      val lseg = segmentized.assertNext(0)
-      val rseg = segmentized.assertNext(1)
-      val lset = if (lseg == null) empty else {
+
+      // otherwise search down subtrees
+      println("values: ", node.values, value, handlers.lookup(node.values, value))
+      lazy val nset = handlers.lookup(node.values, value)
+
+      lazy val wseg = segmentized.cut
+      lazy val wset = if (wseg == null) empty else {
+        search(node.wildcard, value, wseg)
+      }
+      lazy val lseg = segmentized.assertNext(0)
+      lazy val lset = if (lseg == null) empty else {
         search(node.lch, value, lseg)
       }
-      val rset = if (rseg == null) empty else {
+      lazy val rseg = segmentized.assertNext(1)
+      lazy val rset = if (rseg == null) empty else {
         search(node.rch, value, rseg)
       }
-      return lset | rset
+      return segmentized.nextPair match {
+        case (0, 0) => wset | lset | rset | nset
+        case (0, 1) => wset | lset | nset
+        case (1, 1) => wset | rset | nset
+        case _ => empty
+      }
     }
     return empty
   }
@@ -119,57 +195,47 @@ class TenaryPatriciaTree[V, T](val maxDepth: Int,
       return new Node(segmentized.current, depth, handlers.init(value))
     }
     val longestMatch = getLongestMatch(node.cond, segmentized)
-    val finalNode = if (node.cond == longestMatch) { node } else {
-      val common = node.cond & longestMatch
-      val lch = split(node, common.len, 0)
-      val rch = split(node, common.len, 1)
-      new Node(common, depth, empty, lch, rch)
+    val finalNode = if (node.cond.len == longestMatch.len) { node } else {
       // need to split
+      val common = longestMatch
+      splitNode(node, common)
     }
-    if (finalNode.isLeaf || finalNode.isLast) {
-      // cannot proceed, insert now
-      return new Node(finalNode.cond, depth,
-                      finalNode.values + handlers.couple(value, segmentized))
+    finalNode.subsets = finalNode.subsets + handlers.couple(value, segmentized)
+    if ((!segmentized.hasNext) || (finalNode.isLast)) {
+      // cannot proceed, return
+      finalNode.values = finalNode.values + handlers.couple(value, segmentized)
+      return finalNode
     }
-    val lseg = segmentized.assertNext(0)
-    val rseg = segmentized.assertNext(1)
-    val lch = if (lseg == null) finalNode.lch else {
-      insert(finalNode.lch, value, lseg, depth + finalNode.cond.len)
+
+    lazy val wseg = segmentized.assertNext(0, 0)
+    lazy val lseg = segmentized.assertNext(0)
+    lazy val rseg = segmentized.assertNext(1)
+
+    if (wseg != null) {
+      finalNode.wildcard = insert(finalNode.wildcard, value, wseg, depth + finalNode.cond.len)
+    } else if (lseg != null) {
+      finalNode.lch = insert(finalNode.lch, value, lseg, depth + finalNode.cond.len)
+    } else {
+      finalNode.rch = insert(finalNode.rch, value, rseg, depth + finalNode.cond.len)
     }
-    val rch = if (rseg == null) finalNode.rch else {
-      insert(finalNode.rch, value, rseg, depth + finalNode.cond.len)
-    }
-    return new Node(finalNode.cond, depth, empty, lch, rch)
+    return finalNode
   }
 
-  def split(node: Node, offset: Int, next: Int): Node = {
-    val seg = (node.cond << offset).unmask(0, next)
-    if (seg == null) null else {
-      new Node(seg, node.depth + offset, node.values, node.lch, node.rch)
-    }
-  }
+  def splitNode(node: Node, segment: Segment): Node = {
+    val offset = segment.len
 
-  def merge(x: Node, y: Node): Node = {
-    if (x == null) {
-      return y
+    val depth = node.depth
+    val newSegment = (node.cond << offset)
+    node.cond = newSegment
+    node.depth = node.depth + offset
+
+    return if (newSegment.isMasked(0)) {
+      new Node(segment, depth, makeEmpty, null, null, node)
+    } else if (newSegment.unmask(0, 0) != null) {
+      new Node(segment, depth, makeEmpty, node, null, null)
+    } else {
+      new Node(segment, depth, makeEmpty, null, node, null)
     }
-    if (y == null) {
-      return x
-    }
-    if (x.cond == y.cond) {
-      val lch = merge(x.lch, y.lch)
-      val rch = merge(x.rch, y.rch)
-      val values = if (!x.isLeaf) empty else x.values | y.values
-      return new Node(x.cond.mask(0), x.depth, values, lch, rch)
-    }
-    val common = x.cond & y.cond
-    val xlch = split(x, common.len, 0)
-    val xrch = split(x, common.len, 1)
-    val ylch = split(y, common.len, 0)
-    val yrch = split(y, common.len, 1)
-    val lch = merge(xlch, ylch)
-    val rch = merge(xrch, yrch)
-    return new Node(common, x.depth, empty, lch, rch)
   }
 
   def delete(node: Node, value: V, segmentized: Segmentized[V]): Node = {
@@ -177,40 +243,53 @@ class TenaryPatriciaTree[V, T](val maxDepth: Int,
       return node
     }
     segmentized.proceed(node.cond.len)
-    if (node.isLeaf) {
-      val remained = node.values - handlers.couple(value, segmentized)
-      if (remained.isEmpty) {
-        return null
+    if (node.cond != segmentized.current) {
+      // mismatch: return
+      return node
+    }
+    node.subsets = node.subsets - handlers.couple(value, segmentized)
+
+    if ((!segmentized.hasNext) || (node.isLast)) {
+      // remove from value
+      node.values = node.values - handlers.couple(value, segmentized)
+      return if (node.values.isEmpty) null else node
+    }
+
+    lazy val wseg = segmentized.assertNext(0, 0)
+    lazy val lseg = segmentized.assertNext(0)
+    lazy val rseg = segmentized.assertNext(1)
+
+    if (wseg != null) {
+      node.wildcard = delete(node.wildcard, value, wseg)
+    } else if (lseg != null) {
+      node.lch = delete(node.lch, value, lseg)
+    } else {
+      node.rch = delete(node.rch, value, rseg)
+    }
+
+    return compactNode(node)
+  }
+
+  def compactNode(node: Node): Node = {
+    if (node.subsets.isEmpty) null // the whole subtree is empty
+    else if (node.values.isEmpty) {
+      // node is a split point
+      // if there is only one child, replace node with it
+      val onlyChild = if (node.wildcard == null) {
+        if (node.lch == null) node.rch
+        else if (node.rch == null) node.lch
+        else null
+      } else {
+        if (node.lch == null && node.rch == null) node.wildcard
+        else null
       }
-      return new Node(node.cond, node.depth, remained)
-    }
-    val lseg = segmentized.assertNext(0)
-    val rseg = segmentized.assertNext(1)
-    val lch = if (lseg == null) node.lch else {
-      delete(node.lch, value, lseg)
-    }
-    val rch = if (rseg == null) node.rch else {
-      delete(node.rch, value, rseg)
-    }
-    if ((lch == null) && (rch == null)) {
-      return null
-    }
-    if ((lch == null) || (rch == null)) {
-      val sub = if (lch == null) rch else lch
-      val cond = node.cond + sub.cond
-      val values = sub.values
-      return new Node(cond, node.depth, values)
-    }
-    if (lch.isLeaf && rch.isLeaf) {
-      if ((lch.cond << 1) == (rch.cond << 1)) {
-        if (lch.values == rch.values) {
-          val cond = node.cond + lch.cond.mask(0)
-          val values = lch.values | rch.values
-          return new Node(cond, node.depth, values)
-        }
+      if (onlyChild == null) node
+      else {
+        onlyChild.cond = node.cond + onlyChild.cond
+        onlyChild.depth = node.depth
+        onlyChild
       }
-    }
-    return new Node(node.cond, node.depth, empty, lch, rch)
+    } else node
   }
 
   def +=(value: V)(implicit segmentize: V => Segmentized[V]): TenaryPatriciaTree[V, T] = {
@@ -230,13 +309,13 @@ class TenaryPatriciaTree[V, T](val maxDepth: Int,
     if (node == null) {
       return
     }
-    println(Seq.fill(treeDepth)("-").mkString("") + node.cond.binaryString)
-    if (node.isLeaf) {
-      println(Seq.fill(treeDepth)(" ").mkString("") + " -> " + node.values)
-      return
-    }
-    recursiveDump(node.lch, treeDepth + 1)
-    recursiveDump(node.rch, treeDepth + 1)
+    val condStr = Seq.fill(treeDepth)("-").mkString("") + node.cond.binaryString
+    val valueStr = if (node.values.isEmpty) "" else " -> " + node.values
+    val subsetStr = if (node.subsets.isEmpty) "" else " " + node.subsets
+    println(condStr + " " + valueStr + " " + subsetStr)
+    recursiveDump(node.lch, treeDepth + node.cond.len)
+    recursiveDump(node.rch, treeDepth + node.cond.len)
+    recursiveDump(node.wildcard, treeDepth + node.cond.len)
   }
 
   def dump() = recursiveDump(root, 0)

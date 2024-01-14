@@ -5,6 +5,11 @@ package openflash.fimt.util
 case class Segment(val value: BigInt, val mask: BigInt, val len: Int) {
   import Segment._
 
+  override def equals(x: Any): Boolean = x match {
+    case s: Segment => (value == s.value) && (mask == s.mask)
+    case _ => false
+  }
+
   def isEmpty: Boolean = len == 0
 
   def +(rhs: Segment): Segment =
@@ -97,6 +102,8 @@ trait Segmentized[V] {
 
   def isEmpty: Boolean
 
+  def nextPair: (Int, Int)
+
   def hasNext: Boolean
 
   def current: Segment
@@ -105,6 +112,8 @@ trait Segmentized[V] {
 
   def proceed(steps: Int = 1): Unit
 
+  def cut: Segmentized[V]
+
   def assertNext(next: Int, nextMask: Int = 1): Segmentized[V]
 }
 
@@ -112,8 +121,6 @@ abstract class BaseSegmentizer[T](maxDepth: Int) extends Segmentized[T] {
   var currentSeg = Segment(0, 0, 0)
 
   def currentPos = currentSeg.len
-
-  def nextPair: (BigInt, BigInt)
 
   override def isEmpty = currentPos == 0
 
@@ -146,6 +153,11 @@ class MaskedIntSegmentizer[T](value: BigInt, mask: BigInt,
     if (value.testBit(pos)) (1, 1) else (0, 1)
   }
 
+  override def cut: Segmentized[T] = if (!hasNext) null else {
+    new MaskedIntSegmentizer[T](value, mask,
+                                lower, upper - currentPos, maxDepth - currentPos)
+  }
+
   override def assertNext(next: Int, nextMask: Int): Segmentized[T] = {
     if (!hasNext) {
       return null
@@ -157,15 +169,15 @@ class MaskedIntSegmentizer[T](value: BigInt, mask: BigInt,
         val newMask = if (nextMask == 0) mask else mask.setBit(pos)
         new MaskedIntSegmentizer[T](newValue, newMask,
                                     lower, upper - currentPos, maxDepth - currentPos)
-    }
+      }
     }
   }
 }
 
-class StringSegmentizer(value: String,
-                        maxDepth: Int) extends BaseSegmentizer[String](maxDepth) {
+class StringSegmentizer[V](value: String,
+                           maxDepth: Int) extends BaseSegmentizer[V](maxDepth) {
 
-  override def nextPair: (BigInt, BigInt) = value.charAt(currentPos) match {
+  override def nextPair: (Int, Int) = value.charAt(currentPos) match {
     case '0' => (0, 1)
     case '1' => (1, 1)
     case _ => (0, 0)
@@ -173,7 +185,15 @@ class StringSegmentizer(value: String,
 
   override def hasNext = currentPos < Math.min(value.length(), maxDepth)
 
-  override def assertNext(next: Int, nextMask: Int): Segmentized[String] = {
+  override def cut: Segmentized[V] = {
+    if (!hasNext) {
+      return null
+    }
+    val substr = value.substring(currentPos)
+    new StringSegmentizer[V](substr, maxDepth - currentPos)
+  }
+
+  override def assertNext(next: Int, nextMask: Int): Segmentized[V] = {
     if (!hasNext) {
       return null
     }
@@ -182,7 +202,7 @@ class StringSegmentizer(value: String,
       if ((next & np._2) != np._1) { null } else {
         val nextStr = if (nextMask == 0) "*" else next.toString
         val substr = nextStr + value.substring(currentPos + 1)
-        new StringSegmentizer(substr, maxDepth - currentPos)
+        new StringSegmentizer[V](substr, maxDepth - currentPos)
       }
     }
   }
