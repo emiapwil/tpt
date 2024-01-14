@@ -19,18 +19,27 @@ trait Handles[V, T] {
   def init(elems: V*): Handle[V, T]
 
   def couple(elem: V, seg: Segmentized[V]): (V, Segmentized[V])
+
+  def lookup(handle: Handle[V, T], elem: V): Handle[V, T]
 }
 
 class SetHandles[V] extends Handles[V, Set[V]] {
 
   type T = Set[V]
 
+  val empty = init()
+
   override def init(elems: V*): Handle[V, T] = new SetHandle(elems)
 
   override def couple(elem: V, seg: Segmentized[V]) = (elem, seg)
 
+  override def lookup(handle: Handle[V, T], elem: V) = handle match {
+    case sh: SetHandle => sh
+    case _ => empty
+  }
+
   class SetHandle(val value: Iterable[V]) extends Handle[V, T] {
-    override def impl = Set.from(value)
+    override def impl = value.toSet
 
     override def isEmpty = impl.isEmpty
 
@@ -56,13 +65,14 @@ class TenaryPatriciaTree[V, T](val maxDepth: Int,
 
   val empty = handlers.init()
 
-  class Node(val cond: Segment, val depth: Int,
-             val values: Handle[V, T] = empty,
-             val lch: Node = null, val rch: Node = null){
+  class Node(var cond: Segment, var depth: Int,
+             var values: Handle[V, T] = empty,
+             var lch: Node = null, var rch: Node = null,
+             var wildcard: Node = null){
 
     def isLast: Boolean = depth + cond.len >= maxDepth
 
-    def isLeaf: Boolean = (!values.isEmpty)
+    def isLeaf: Boolean = (values.isEmpty)
   }
 
   def getLongestMatch(cond: Segment, segmentized: Segmentized[V]): Segment = {

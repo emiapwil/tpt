@@ -25,11 +25,14 @@ case class Segment(val value: BigInt, val mask: BigInt, val len: Int) {
     val diffValue = lowestBit((value ^ rhs.value) & commonMask)
     val valueLen = if (diffValue == 0) maskLen else log2(diffValue)
     val commonValueMask = if (diffValue == 0) commonMask else (diffValue - 1) & commonMask
-    val commonValue = value & commonMask
+    val commonValue = value & commonValueMask
 
     Segment(commonValue, commonValueMask, valueLen)
   }
 
+  /**
+    * rhs is a prefix of lhs
+    */
   def ~(rhs: Segment): Boolean = {
     if (len < rhs.len) false else {
       val maskOfMask = (BigInt(1) << rhs.len) - 1
@@ -39,10 +42,22 @@ case class Segment(val value: BigInt, val mask: BigInt, val len: Int) {
     }
   }
 
+  /**
+    * lhs is a superset of rhs
+    *
+    * @param rhs
+    * @return
+    */
   def >(rhs: Segment): Boolean = if ((mask & rhs.mask) != mask) false else {
     (value & mask) == (rhs.value & mask)
   }
 
+  /**
+    * lhs is a subset of rhs
+    *
+    * @param rhs
+    * @return
+    */
   def <(rhs: Segment): Boolean = rhs > this
 
   def <<(offset: Int): Segment = {
@@ -88,9 +103,9 @@ trait Segmentized[V] {
 
   def next: Segment
 
-  def proceed(steps: Int = 1)
+  def proceed(steps: Int = 1): Unit
 
-  def assertNext(next: Int): Segmentized[V]
+  def assertNext(next: Int, nextMask: Int = 1): Segmentized[V]
 }
 
 abstract class BaseSegmentizer[T](maxDepth: Int) extends Segmentized[T] {
@@ -131,16 +146,18 @@ class MaskedIntSegmentizer[T](value: BigInt, mask: BigInt,
     if (value.testBit(pos)) (1, 1) else (0, 1)
   }
 
-  override def assertNext(next: Int): Segmentized[T] = {
+  override def assertNext(next: Int, nextMask: Int): Segmentized[T] = {
     if (!hasNext) {
       return null
     }
     val np = nextPair
-    if ((next & np._2) != np._1) { null } else {
-      val newValue = if (next == 0) value.clearBit(pos) else value.setBit(pos)
-      val newMask = mask.setBit(pos)
-      new MaskedIntSegmentizer[T](newValue, newMask,
-                                  lower, upper - currentPos, maxDepth - currentPos)
+    if ((nextMask | np._2) != nextMask) null else {
+      if ((next & np._2) != np._1) { null } else {
+        val newValue = if (next == 0) value.clearBit(pos) else value.setBit(pos)
+        val newMask = if (nextMask == 0) mask else mask.setBit(pos)
+        new MaskedIntSegmentizer[T](newValue, newMask,
+                                    lower, upper - currentPos, maxDepth - currentPos)
+    }
     }
   }
 }
@@ -156,16 +173,17 @@ class StringSegmentizer(value: String,
 
   override def hasNext = currentPos < Math.min(value.length(), maxDepth)
 
-  override def assertNext(next: Int): Segmentized[String] = {
+  override def assertNext(next: Int, nextMask: Int): Segmentized[String] = {
     if (!hasNext) {
       return null
     }
     val np = nextPair
-    if ((next & np._2) != np._1) {
-      null
-    } else {
-      val substr = next.toString + value.substring(currentPos + 1)
-      new StringSegmentizer(substr, maxDepth - currentPos)
+    if ((nextMask | np._2) != nextMask) null else {
+      if ((next & np._2) != np._1) { null } else {
+        val nextStr = if (nextMask == 0) "*" else next.toString
+        val substr = nextStr + value.substring(currentPos + 1)
+        new StringSegmentizer(substr, maxDepth - currentPos)
+      }
     }
   }
 }
