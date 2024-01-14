@@ -1,4 +1,4 @@
-package openflash.fimt.util
+package org.nextlab.openflash.util
 
 import org.scalatest.funsuite.AnyFunSuite
 
@@ -39,36 +39,42 @@ class TptFunSuite extends AnyFunSuite {
   }
 
   test("The tenary patricia tree should have the right structure") {
-    val patriciaTree = new TenaryPatriciaTree[String, Set[String]](3)
+
+    implicit val segmentize: String => Segmentized[String] = new StringSegmentizer[String](_, 3)
+
+    val tpt = new TenaryPatriciaTree[String, Set[String]](3)
+
+    val str0 = "**"
     val str1 = "*****"
     val str2 = "0*1**"
     val str3 = "***1*"
     val str4 = "**11*"
     val str5 = "**00*"
-    val str6 = "**"
 
-    implicit val segmentize: String => Segmentized[String] = new StringSegmentizer[String](_, 3)
-
-    patriciaTree += str6
-    patriciaTree += str1
-    patriciaTree.dump()
+    tpt += str0
+    tpt += str1
+    tpt.dump()
     println("Testing searching for " + str2)
-    println(patriciaTree ? (str2))
+    println(tpt ? (str2))
+    assert((tpt ? (str2)).impl == Set(str0, str1))
     println("Testing insertion of " + str2)
-    patriciaTree += str2
-    patriciaTree.dump()
+    tpt += str2
+    tpt.dump()
     println("Testing searching for " + str3)
-    println(patriciaTree ? (str3))
+    println(tpt ? (str3))
+    assert((tpt ? (str3)).impl == Set(str0, str1, str2))
     println("Testing insertion of " + str3)
-    patriciaTree += str3
-    patriciaTree.dump()
+    tpt += str3
+    tpt.dump()
     println("Testing searching for " + str4)
-    println(patriciaTree ? (str4))
+    println(tpt ? (str4))
+    assert((tpt ? (str4)).impl == Set(str0, str1, str2, str3))
     println("Testing insertion of " + str3)
-    patriciaTree += str4
-    patriciaTree.dump()
+    tpt += str4
+    tpt.dump()
     println("Testing searching for " + str5)
-    println(patriciaTree ? (str5))
+    println(tpt ? (str5))
+    assert((tpt ? (str5)).impl == Set(str0, str1, str3))
   }
 
   test("TPT with sorted set") {
@@ -79,36 +85,40 @@ class TptFunSuite extends AnyFunSuite {
 
     implicit val ordering = Ordering.by[V, Int](_._1)
 
-    val patriciaTree = new TenaryPatriciaTree(3, new SortedSetHandles[V](true))
+    val tpt = new TenaryPatriciaTree(3, new SortedSetHandles[V](true))
 
+    val p0 = (1, "**")
     val p1 = (13, "*****")
     val p2 = (5, "0*1**")
     val p3 = (3, "***1*")
     val p4 = (6, "**11*")
     val p5 = (9, "**00*")
-    val p6 = (1, "**")
 
     implicit val segmentize: V => Segmentized[V] = x => new StringSegmentizer[V](x._2, 3)
 
-    patriciaTree += p6
-    patriciaTree += p1
-    patriciaTree.dump()
+    tpt += p0
+    tpt += p1
+    tpt.dump()
     println("Testing searching for " + p2)
-    println(patriciaTree ? (p2))
+    println(tpt ? (p2))
+    assert((tpt ? (p2)).impl.toSet == Set(p0))
     println("Testing insertion of " + p2)
-    patriciaTree += p2
-    patriciaTree.dump()
+    tpt += p2
+    tpt.dump()
     println("Testing searching for " + p3)
-    println(patriciaTree ? (p3))
+    println(tpt ? (p3))
+    assert((tpt ? (p3)).impl.toSet == Set(p0))
     println("Testing insertion of " + p3)
-    patriciaTree += p3
-    patriciaTree.dump()
+    tpt += p3
+    tpt.dump()
     println("Testing searching for " + p4)
-    println(patriciaTree ? (p4))
-    println("Testing insertion of " + p3)
-    patriciaTree += p4
-    patriciaTree.dump()
+    println(tpt ? (p4))
+    assert((tpt ? (p4)).impl.toSet == Set(p0, p2, p3))
+    println("Testing insertion of " + p4)
+    tpt += p4
+    tpt.dump()
     println("Testing searching for " + p5)
-    println(patriciaTree ? (p5))
+    println(tpt ? (p5))
+    assert((tpt ? (p5)).impl.toSet == Set(p0, p3))
   }
 }

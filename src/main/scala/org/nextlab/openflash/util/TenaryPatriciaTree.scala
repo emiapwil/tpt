@@ -1,4 +1,4 @@
-package openflash.fimt.util
+package org.nextlab.openflash.util
 
 import scala.collection.mutable.SortedSet
 
@@ -82,7 +82,9 @@ class SortedSetHandles[V](val minFirst: Boolean)(implicit val order: Ordering[V]
   }
 
   class SSetHandle(value: Iterable[V]) extends Handle[V, T] {
-    override def impl = SortedSet.from(value.toSeq)
+    val _impl = SortedSet.from(value.toSeq)
+
+    override def impl = _impl
 
     override def isEmpty = impl.isEmpty
 
@@ -155,12 +157,10 @@ class TenaryPatriciaTree[V, T](val maxDepth: Int,
 
       if ((!segmentized.hasNext) || (node.isLeaf)) {
         // the whole subtree is matched, return subsets
-        println("subset:", node.subsets, value, handlers.lookup(node.subsets, value))
         return handlers.lookup(node.subsets, value)
       }
 
       // otherwise search down subtrees
-      println("values: ", node.values, value, handlers.lookup(node.values, value))
       lazy val nset = handlers.lookup(node.values, value)
 
       lazy val wseg = segmentized.cut

@@ -1,4 +1,4 @@
-package openflash.fimt.util
+package org.nextlab.openflash.util
 
 // Segment is reversed: lowest bit in segment is highest bit in var
 // segment(0) = predicate & anchor(nVar -1)
